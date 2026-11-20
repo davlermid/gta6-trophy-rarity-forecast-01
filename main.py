@@ -390,8 +390,9 @@ def solve_case(case: dict) -> dict:
             # Simulate with hazard
             lam = clamp(lambda_final, 1e-6, 0.5)
             E = E_now
-            for s in range(24):
-                dt_step = horizon_hours / 24.0
+            steps = 24 if horizon_hours <= 48 else 48
+            dt_step = horizon_hours / steps if steps else horizon_hours
+            for s in range(steps):
                 h_mid = h_now + (s + 0.5) * dt_step
                 P_mid = P_at(h_mid)
                 lam_now = lam * math.exp(-LAMBDA_DECAY * (h_mid - h_now) / 24.0)
