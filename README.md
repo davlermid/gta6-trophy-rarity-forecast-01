@@ -4,67 +4,16 @@
 
 # GTA VI Trophy Rarity Forecaster
 
-This program forecasts trophy earn rates for Grand Theft Auto VI on PlayStation 5 using an earners/players decomposition model.
+Forecasts five quantiles (5/25/50/75/95%) of every GTA VI PS5 trophy's Exophase earn rate at a case's target, from the history of page reads in the case. Scored by mean pinball loss on the logit scale.
 
-## Approach
+## Method (v2)
 
-The forecaster decomposes each trophy's earn rate into two components:
+Exophase refreshes its counts in bursts: long stretches of identical reads, then jumps. So the model first extracts REFRESH POINTS (reads where players_tracked or any rate changed) and fits everything on those only; stale repeats carry no information and must not shrink the spread.
 
-1. **Players tracked** — the total player population, forecast via log-linear fit on `ln(P)` vs `ln(1 + hours since launch)` with damped slope.
-2. **Earners per trophy** — the number of players who have earned each trophy.
+- Players: power-law fit of ln(players) vs ln(1+hours since launch) on recent (48h) refresh points, slope damped, anchored at the current count. With too few refresh points, a gamma=1 power-law prior from the last refresh snapshot (a stale snapshot understates the current player count).
+- Earners per trophy: a hazard model. The per-trophy hazard lambda is estimated from refresh intervals (dE = lambda*(P-E)*dt, midpoint pool, recent intervals preferred), shrunk toward the tier median, then simulated forward along the players forecast curve. This saturates naturally and handles dilution (new players lower rates) honestly. Trophies at >=99% are treated as instant (new players earn them immediately).
+- With no estimable hazard (flat/stale history), two priors blend by horizon: a beta prior where earners lag player growth (short horizons, dilution dominates) and a tier hazard prior with a 48h reachability ramp (long horizons, earners catch up).
+- The earners view is blended 85/15 in logit space with a logit-rate trend view (tier-shrunk slope, damped extrapolation). An earners floor/ceiling keeps the median physical: earners never decrease and never exceed players.
+- Spread (logit sigma): fit residuals + horizon growth + rate quantization + a staleness/refresh-jump term proportional to log player growth when the snapshot is stale + an information term that widens when few refresh points exist. Trophies with almost no earners yet get a wide spread and a small earners floor.
 
-The final rate forecast blends two views in logit space:
-
-- **Rate view (70% weight)**: Weighted least squares on `logit(rate)` vs `x = ln(1+h)`, with slope shrunk toward the tier-level median slope (60/40 blend). This captures the population-level adoption curve.
-- **Earners view (30% weight)**: Fit `ln(E + 0.5)` vs `x`, predict earners at target, divide by forecasted players. Slope shrunk strongly toward 0 (70/30) — persistence in earners space.
-
-For rates already above 80% (near saturation), the blend shifts to 95/5 persistence/trend to avoid overshooting.
-
-**Tier-slope shrinkage**: Individual trophy slopes are blended with their tier's median slope (platinum, gold, silver, bronze), stabilizing estimates for trophies with few reads.
-
-**Earners floor**: The forecasted median earners count never drops below the current earners count, ensuring monotonicity.
-
-**Spread construction**: The predictive sigma combines:
-- Fit residual sigma (shrunk toward tier median)
-- Horizon inflation: `0.45 * sqrt(horizon_days)`
-- Quantization noise: one quantum in logit units
-- Staleness inflation: up to +30% if recent reads repeat identically
-- Clamped to [0.22, 2.4] logit units
-
-Quantiles use the logit-normal distribution with z-scores `[-1.645, -0.674, 0, 0.674, 1.645]` for levels `[0.05, 0.25, 0.5, 0.75, 0.95]`, rounded to 4 decimals (half-up).
-
-**Determinism**: Pure Python 3.13 standard library, no network, no randomness. Same input → identical output.
-
-## Running Locally
-
-```bash
-mkdir -p out
-MAKEFUN_INPUT_DIR=~/gta6-rarity01-kit/input MAKEFUN_OUTPUT_DIR=out python3 main.py
-```
-
-The program reads every `*.in` file in `MAKEFUN_INPUT_DIR` (default `/input`), writes corresponding `*.out` to `MAKEFUN_OUTPUT_DIR` (default `/output`).
-
-## Validation Results
-
-**Practice cases** (`p00.in`, `p01.in`):
-- 55 trophies each, valid IDs 1–55
-- 5 quantiles per trophy, all finite in [0.01, 99.99]
-- Quantiles non-decreasing
-- Output size < 65,536 bytes
-- Deterministic across runs
-
-**Synthetic stress test** (2.5 days of 30-min reads, 55 trophies, horizon 4.5 days):
-| Model | Mean Pinball Loss (logit scale) |
-|-------|-------------------------------|
-| This forecaster | 0.622 |
-| Starter (persistence) | 0.601 |
-
-The starter edges out this model on this synthetic case. The synthetic generator uses deterministic growth curves (exponential saturation) which favor pure persistence. On real practice cases with noisier data and shorter horizons, the decomposition approach typically captures trends better.
-
-## Files
-
-- `main.py` — forecaster (stdlib only, < 8s per case)
-- `README.md` — this file
-- `LICENSE` — MIT
-- `.makefun/` — kit metadata
-- `.git/` — version history
+Deterministic, Python 3.13 standard library only, no network. Run locally with MAKEFUN_INPUT_DIR / MAKEFUN_OUTPUT_DIR pointing at case files.
